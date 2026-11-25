@@ -1,0 +1,213 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{{ settings.game_name or 'Interactive Quiz System' }}</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Prompt:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/css/player.css">
+  <script src="/static/js/sounds.js"></script>
+</head>
+<body style="--ui-scale: {{ settings.font_scale or 1.12 }};">
+  <div class="page-wrap top-align">
+    <div class="container-wide">
+      <div class="card">
+        <header class="card-header">
+          <span class="status-dot" aria-hidden="true"></span>
+          <img src="{{ settings.logo_path or '/static/images/pbtc-logo.png' }}" alt="โลโก้วิทยาลัยเทคนิคเพชรบุรี" class="logo-img"
+               onerror="this.style.display='none'; this.nextElementSibling.style.display='block';">
+          <div class="logo-emoji" style="display:none">🎓</div>
+          <h1>{{ settings.game_name or 'เกมตอบคำถาม วิทยาลัยเทคนิคเพชรบุรี' }}</h1>
+          <p class="subtitle">{{ settings.welcome_message or 'ยินดีต้อนรับสู่ระบบเกมตอบคำถาม วิทยาลัยเทคนิคเพชรบุรี' }}</p>
+          <p class="college-name">วิทยาลัยเทคนิคเพชรบุรี</p>
+        </header>
+
+        <div class="card-body">
+          <div class="form-group">
+            <label class="form-label" for="playerName">ชื่อผู้เล่น (ไม่บังคับ)</label>
+            <input type="text" id="playerName" class="form-input" maxlength="100" placeholder="กรอกชื่อของคุณ..." autocomplete="nickname">
+          </div>
+
+          <div class="section-title-row">
+            <h2 class="section-title">เลือกหมวดหมู่</h2>
+            <p class="section-meta" id="roundInfo"></p>
+          </div>
+
+          <div class="category-grid" id="categoryGrid" role="listbox" aria-label="หมวดหมู่">
+            <div class="loading-text">กำลังโหลดหมวดหมู่...</div>
+          </div>
+
+          <div class="show-more-wrap hidden" id="showMoreWrap">
+            <button type="button" class="btn-link" id="btnShowMore">ดูหมวดหมู่เพิ่มเติม ↓</button>
+          </div>
+
+          <p class="selected-label" id="selectedLabel" aria-live="polite"></p>
+
+          <button type="button" id="btnStart" class="btn btn-primary" disabled>
+            <span>เริ่มเกม</span>
+            <svg width="20" height="20" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+              <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM9.555 7.168A1 1 0 008 8v4a1 1 0 001.555.832l3-2a1 1 0 000-1.664l-3-2z" clip-rule="evenodd"/>
+            </svg>
+          </button>
+
+          <p class="error-msg hidden" id="errorMsg" role="alert"></p>
+
+          <div class="hint-box">
+            <p>เลือกหมวดหมู่ที่ต้องการ แล้วกดเริ่มเกม</p>
+          </div>
+
+          {% if settings.show_qr_home and settings.qr_url %}
+          <div class="qr-block">
+            <img src="/api/qr.svg?u={{ settings.qr_url | urlencode }}" alt="QR {{ settings.qr_label or '' }}">
+            {% if settings.qr_label %}<p class="qr-label">{{ settings.qr_label }}</p>{% endif %}
+          </div>
+          {% endif %}
+        </div>
+      </div>
+
+      <p class="footer-note">วิทยาลัยเทคนิคเพชรบุรี • ระบบเกมตอบคำถาม</p>
+    </div>
+  </div>
+
+  <script>
+    const INITIAL_SHOW = 4;
+    let allCategories = [];
+    let showingAll = false;
+    let selectedCategoryId = null;
+    let questionsPerRound = 10;
+
+    const els = {
+      grid: document.getElementById('categoryGrid'),
+      showMoreWrap: document.getElementById('showMoreWrap'),
+      btnShowMore: document.getElementById('btnShowMore'),
+      selectedLabel: document.getElementById('selectedLabel'),
+      btnStart: document.getElementById('btnStart'),
+      playerName: document.getElementById('playerName'),
+      errorMsg: document.getElementById('errorMsg'),
+      roundInfo: document.getElementById('roundInfo')
+    };
+
+    function escapeHtml(t) {
+      const d = document.createElement('div');
+      d.textContent = t || '';
+      return d.innerHTML;
+    }
+
+    function renderCategories() {
+      const list = showingAll ? allCategories : allCategories.slice(0, INITIAL_SHOW);
+      if (!allCategories.length) {
+        els.grid.innerHTML = '<div class="loading-text">ยังไม่มีหมวดหมู่ที่เปิดใช้งาน</div>';
+        els.showMoreWrap.classList.add('hidden');
+        return;
+      }
+
+      els.grid.innerHTML = list.map(c => {
+        const disabled = c.question_count === 0;
+        const selected = selectedCategoryId === c.id;
+        const playCount = Math.min(c.question_count, questionsPerRound);
+        return `
+          <button type="button" role="option" aria-selected="${selected}"
+            class="cat-card ${selected ? 'selected' : ''} ${disabled ? 'disabled' : ''}"
+            data-id="${c.id}" ${disabled ? 'disabled' : ''}>
+            <div class="cat-card-inner">
+              <span class="cat-icon">${escapeHtml(c.icon || '📁')}</span>
+              <div class="cat-info">
+                <p class="cat-name">${escapeHtml(c.name)}</p>
+                <p class="cat-desc">${escapeHtml(c.description || '')}</p>
+                <p class="cat-meta ${c.question_count > 0 ? '' : 'empty'}">
+                  ${c.question_count > 0
+                    ? `มี ${c.question_count} คำถาม · เล่น ${playCount} ข้อ`
+                    : 'ยังไม่มีคำถาม'}
+                </p>
+              </div>
+            </div>
+          </button>
+        `;
+      }).join('');
+
+      els.grid.querySelectorAll('.cat-card:not(.disabled)').forEach(btn => {
+        btn.addEventListener('click', () => selectCategory(parseInt(btn.dataset.id, 10)));
+      });
+
+      if (allCategories.length > INITIAL_SHOW) {
+        els.showMoreWrap.classList.remove('hidden');
+        els.btnShowMore.textContent = showingAll
+          ? 'ย่อหมวดหมู่ ↑'
+          : `ดูหมวดหมู่เพิ่มเติม (${allCategories.length - INITIAL_SHOW}) ↓`;
+      } else {
+        els.showMoreWrap.classList.add('hidden');
+      }
+    }
+
+    function selectCategory(id) {
+      selectedCategoryId = id;
+      const cat = allCategories.find(c => c.id === id);
+      els.selectedLabel.textContent = cat ? `เลือกแล้ว: ${cat.icon || ''} ${cat.name}` : '';
+      els.btnStart.disabled = false;
+      renderCategories();
+    }
+
+    async function loadCategories() {
+      try {
+        const res = await fetch('/api/player/categories');
+        const data = await res.json();
+        allCategories = data.categories || [];
+        questionsPerRound = data.questions_per_round || 10;
+        if (window.QuizSound) {
+          QuizSound.setEnabled(!!data.enable_sound);
+          QuizSound.preload();
+        }
+        els.roundInfo.textContent = `สุ่ม ${questionsPerRound} ข้อ/รอบ · ${data.time_per_question || 20} วินาที/ข้อ`;
+        renderCategories();
+      } catch (err) {
+        els.grid.innerHTML = '<div class="loading-text" style="color:#ef4444">โหลดหมวดหมู่ไม่สำเร็จ</div>';
+      }
+    }
+
+    els.btnShowMore.addEventListener('click', () => {
+      showingAll = !showingAll;
+      renderCategories();
+    });
+
+    els.btnStart.addEventListener('click', async () => {
+      if (!selectedCategoryId) return;
+      els.btnStart.disabled = true;
+      els.btnStart.innerHTML = '<span class="font-bold">กำลังเตรียมเกม...</span>';
+      els.errorMsg.classList.add('hidden');
+
+      try {
+        const res = await fetch('/api/player/start', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            player_name: els.playerName.value.trim(),
+            category_id: selectedCategoryId
+          })
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          els.errorMsg.textContent = data.message || 'เกิดข้อผิดพลาด';
+          els.errorMsg.classList.remove('hidden');
+          els.btnStart.disabled = false;
+          els.btnStart.innerHTML = '<span>เริ่มเกม</span>';
+          return;
+        }
+        sessionStorage.setItem('quiz_session', JSON.stringify(data));
+        if (window.QuizSound) {
+          QuizSound.setEnabled(!!data.enable_sound);
+          QuizSound.play('start');
+        }
+        setTimeout(function() { window.location.href = '/player/quiz'; }, 180);
+      } catch (err) {
+        els.errorMsg.textContent = 'ไม่สามารถเชื่อมต่อเซิร์ฟเวอร์ได้';
+        els.errorMsg.classList.remove('hidden');
+        els.btnStart.disabled = false;
+        els.btnStart.innerHTML = '<span>เริ่มเกม</span>';
+      }
+    });
+
+    loadCategories();
+  </script>
+</body>
+</html>

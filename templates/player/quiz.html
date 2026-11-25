@@ -1,0 +1,317 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>กำลังเล่น - {{ settings.game_name or 'Quiz' }}</title>
+  <link href="https://fonts.googleapis.com/css2?family=Prompt:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/css/player.css">
+  <script src="/static/js/sounds.js"></script>
+</head>
+<body class="quiz-page">
+  <header class="quiz-topbar">
+    <div class="quiz-topbar-inner">
+      <div class="quiz-cat-info">
+        <span class="quiz-cat-icon" id="catIcon">📚</span>
+        <div>
+          <p class="quiz-cat-name" id="catName">—</p>
+          <p class="quiz-player-label" id="playerLabel"></p>
+        </div>
+      </div>
+      <div class="quiz-progress">
+        <p class="quiz-progress-label">ข้อ</p>
+        <p class="quiz-progress-num"><span id="qNum">-</span>/<span id="qTotal">-</span></p>
+      </div>
+    </div>
+    <div class="timer-track">
+      <div class="timer-bar" id="timerBar"></div>
+    </div>
+  </header>
+
+  <main class="quiz-main">
+    <div class="quiz-meta-row">
+      <div class="timer-display">
+        <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/>
+        </svg>
+        <span class="timer-seconds" id="timerText">20</span> วินาที
+      </div>
+      <div class="score-so-far">
+        คะแนนที่ได้: <strong id="scoreSoFar">0</strong>
+      </div>
+    </div>
+
+    <div class="question-card" id="questionCard">
+      <div class="question-image hidden" id="qImageWrap">
+        <img id="qImage" src="" alt="รูปประกอบคำถาม">
+      </div>
+      <p class="question-text" id="questionText"></p>
+      <div class="options-list" id="optionsList" role="list"></div>
+    </div>
+
+    <div class="feedback-panel hidden" id="feedbackPanel">
+      <div class="feedback-box" id="feedbackBox">
+        <p class="feedback-title" id="feedbackTitle"></p>
+        <p class="feedback-points" id="feedbackPoints"></p>
+        <p class="feedback-explain" id="feedbackExplain"></p>
+        <button type="button" class="btn btn-primary" id="btnNext">ข้อถัดไป →</button>
+      </div>
+    </div>
+  </main>
+
+  <div class="loading-overlay" id="loading">
+    <div class="loading-box">
+      <div class="spinner"></div>
+      <p>กำลังโหลดคำถาม...</p>
+    </div>
+  </div>
+
+  <script>
+    const sessionId = {{ session_id }};
+    // Sound: prefer value from start response, fallback from question API
+    (function initSoundFromSession() {
+      try {
+        const raw = sessionStorage.getItem('quiz_session');
+        if (raw) {
+          const d = JSON.parse(raw);
+          if (typeof d.enable_sound !== 'undefined' && window.QuizSound) {
+            QuizSound.setEnabled(!!d.enable_sound);
+            QuizSound.preload();
+          }
+        }
+      } catch (e) {}
+    })();
+    let currentQuestion = null;
+    let timerInterval = null;
+    let timeLeft = 20;
+    let timePerQuestion = 20;
+    let answering = false;
+    let selectedOptionId = null;
+
+    const els = {
+      loading: document.getElementById('loading'),
+      catIcon: document.getElementById('catIcon'),
+      catName: document.getElementById('catName'),
+      playerLabel: document.getElementById('playerLabel'),
+      qNum: document.getElementById('qNum'),
+      qTotal: document.getElementById('qTotal'),
+      timerBar: document.getElementById('timerBar'),
+      timerText: document.getElementById('timerText'),
+      scoreSoFar: document.getElementById('scoreSoFar'),
+      questionText: document.getElementById('questionText'),
+      optionsList: document.getElementById('optionsList'),
+      qImageWrap: document.getElementById('qImageWrap'),
+      qImage: document.getElementById('qImage'),
+      feedbackPanel: document.getElementById('feedbackPanel'),
+      feedbackBox: document.getElementById('feedbackBox'),
+      feedbackTitle: document.getElementById('feedbackTitle'),
+      feedbackPoints: document.getElementById('feedbackPoints'),
+      feedbackExplain: document.getElementById('feedbackExplain'),
+      btnNext: document.getElementById('btnNext'),
+      questionCard: document.getElementById('questionCard')
+    };
+
+    function escapeHtml(text) {
+      const div = document.createElement('div');
+      div.textContent = text;
+      return div.innerHTML;
+    }
+
+    async function loadQuestion() {
+      answering = false;
+      selectedOptionId = null;
+      els.feedbackPanel.classList.add('hidden');
+      els.loading.classList.remove('hidden');
+
+      try {
+        const res = await fetch('/api/player/question/' + sessionId);
+        const data = await res.json();
+
+        if (!res.ok) {
+          if (data.redirect === 'result' || data.error === 'finished') {
+            try { sessionStorage.setItem('play_finish_sound', '1'); } catch (e) {}
+            window.location.href = '/player/result?session_id=' + sessionId;
+            return;
+          }
+          alert(data.message || 'เกิดข้อผิดพลาด');
+          window.location.href = '/player';
+          return;
+        }
+
+        currentQuestion = data;
+        if (window.QuizSound && typeof data.enable_sound !== 'undefined') {
+          QuizSound.setEnabled(!!data.enable_sound);
+          QuizSound.preload();
+        }
+        timePerQuestion = data.time_per_question || 20;
+        timeLeft = timePerQuestion;
+
+        els.catIcon.textContent = data.category_icon || '📚';
+        els.catName.textContent = data.category_name || '';
+        els.playerLabel.textContent = data.player_name ? ('ผู้เล่น: ' + data.player_name) : '';
+        els.qNum.textContent = data.question_index + 1;
+        els.qTotal.textContent = data.total_questions;
+        els.scoreSoFar.textContent = data.earned_so_far || 0;
+        els.questionText.textContent = data.question_text;
+
+        if (data.image_path) {
+          els.qImage.src = data.image_path;
+          els.qImageWrap.classList.remove('hidden');
+        } else {
+          els.qImageWrap.classList.add('hidden');
+        }
+
+        els.optionsList.innerHTML = '';
+        data.options.forEach(function(opt, i) {
+          const btn = document.createElement('button');
+          btn.type = 'button';
+          btn.className = 'option-btn';
+          btn.dataset.optionId = opt.id;
+          btn.innerHTML = '<span class="option-letter">' + String.fromCharCode(65 + i) + '</span><span>' + escapeHtml(opt.text) + '</span>';
+          btn.addEventListener('click', function() { selectOption(opt.id, btn); });
+          els.optionsList.appendChild(btn);
+        });
+
+        startTimer();
+      } catch (err) {
+        alert('ไม่สามารถโหลดคำถามได้');
+        window.location.href = '/player';
+      } finally {
+        els.loading.classList.add('hidden');
+      }
+    }
+
+    function startTimer() {
+      clearInterval(timerInterval);
+      updateTimerUI();
+      timerInterval = setInterval(function() {
+        timeLeft -= 0.2;
+        if (timeLeft <= 0) {
+          timeLeft = 0;
+          clearInterval(timerInterval);
+          submitAnswer(null, true);
+        }
+        updateTimerUI();
+      }, 200);
+    }
+
+    function updateTimerUI() {
+      const pct = Math.max(0, (timeLeft / timePerQuestion) * 100);
+      els.timerBar.style.width = pct + '%';
+      els.timerText.textContent = Math.ceil(timeLeft);
+      els.timerBar.classList.remove('warn', 'danger');
+      els.timerText.classList.remove('danger');
+      if (timeLeft <= 5) {
+        els.timerBar.classList.add('danger');
+        els.timerText.classList.add('danger');
+      } else if (timeLeft <= 10) {
+        els.timerBar.classList.add('warn');
+      }
+    }
+
+    function selectOption(optionId, btnEl) {
+      if (answering) return;
+      selectedOptionId = optionId;
+      if (window.QuizSound) QuizSound.play('click');
+      document.querySelectorAll('.option-btn').forEach(function(b) { b.classList.remove('selected'); });
+      btnEl.classList.add('selected');
+      setTimeout(function() {
+        if (selectedOptionId === optionId && !answering) {
+          submitAnswer(optionId, false);
+        }
+      }, 300);
+    }
+
+    async function submitAnswer(optionId, isTimeout) {
+      if (answering || !currentQuestion) return;
+      answering = true;
+      clearInterval(timerInterval);
+      document.querySelectorAll('.option-btn').forEach(function(b) { b.disabled = true; });
+
+      try {
+        const res = await fetch('/api/player/answer', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            session_id: sessionId,
+            question_id: currentQuestion.question_id,
+            option_id: optionId,
+            is_timeout: isTimeout,
+            time_left: timeLeft
+          })
+        });
+        const data = await res.json();
+
+        if (!res.ok) {
+          if (data.error === 'already_answered' || data.error === 'finished') {
+            try { sessionStorage.setItem('play_finish_sound', '1'); } catch (e) {}
+            window.location.href = '/player/result?session_id=' + sessionId;
+            return;
+          }
+          alert(data.message || 'เกิดข้อผิดพลาด');
+          answering = false;
+          return;
+        }
+
+        document.querySelectorAll('.option-btn').forEach(function(btn) {
+          const oid = parseInt(btn.dataset.optionId, 10);
+          if (oid === data.correct_option_id) btn.classList.add('correct');
+          else if (optionId && oid === optionId && !data.is_correct) btn.classList.add('wrong');
+        });
+
+        els.feedbackPanel.classList.remove('hidden');
+        els.feedbackBox.className = 'feedback-box';
+        if (data.is_timeout) {
+          els.feedbackBox.classList.add('timeout');
+          els.feedbackTitle.textContent = '⏰ หมดเวลา!';
+          els.feedbackPoints.textContent = 'ไม่ได้คะแนน';
+          if (window.QuizSound) QuizSound.play('timeout');
+        } else if (data.is_correct) {
+          els.feedbackBox.classList.add('success');
+          els.feedbackTitle.textContent = '✓ ถูกต้อง!';
+          els.feedbackPoints.textContent = '+' + data.points_earned + ' คะแนน';
+          if (window.QuizSound) QuizSound.play('correct');
+        } else {
+          els.feedbackBox.classList.add('fail');
+          els.feedbackTitle.textContent = '✗ ผิด!';
+          els.feedbackPoints.textContent = 'คำตอบที่ถูก: ' + data.correct_option_text;
+          if (window.QuizSound) QuizSound.play('wrong');
+        }
+
+        if (data.show_explanation && data.explanation) {
+          els.feedbackExplain.textContent = data.explanation;
+          els.feedbackExplain.classList.remove('hidden');
+        } else {
+          els.feedbackExplain.classList.add('hidden');
+        }
+
+        els.scoreSoFar.textContent = data.earned_points;
+
+        if (data.finished) {
+          // เสียง finish เล่นที่หน้าผลสรุปเท่านั้น
+          try { sessionStorage.setItem('play_finish_sound', '1'); } catch (e) {}
+          els.btnNext.textContent = 'ดูผลสรุป →';
+          els.btnNext.onclick = function() {
+            window.location.href = '/player/result?session_id=' + sessionId;
+          };
+        } else {
+          els.btnNext.textContent = 'ข้อถัดไป →';
+          els.btnNext.onclick = function() { loadQuestion(); };
+        }
+      } catch (err) {
+        alert('ไม่สามารถส่งคำตอบได้');
+        answering = false;
+      }
+    }
+
+    window.addEventListener('beforeunload', function(e) {
+      if (currentQuestion && !answering) {
+        e.preventDefault();
+        e.returnValue = '';
+      }
+    });
+
+    loadQuestion();
+  </script>
+</body>
+</html>

@@ -1,0 +1,47 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg
+*.egg-info/
+dist/
+build/
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Secrets & local runtime (อย่าอัปขึ้น GitHub)
+database/.secret_key
+**/.secret_key
+
+# Optional: ฐานข้อมูลเครื่อง (เอา # ออกถ้าไม่ต้องการแชร์ข้อมูลเล่นจริง)
+# database/quiz.db
+
+# Logs / temp
+*.log
+*.tmp
+*.temp
+.cache/
+
+# OS
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Editors / IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Flask / local uploads ที่สร้างตอนรัน (ถ้ามีอัปโหลดเพิ่มเอง)
+# static/images/uploads/
+
+# Nested duplicate folder ถ้ามีจากการ zip ซ้ำ (ไม่ใช่ซอร์สหลัก)
+# ถ้าในเครื่องมี quiz_system/quiz_system ซ้อน ควรลบก่อน push
